@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Seismic Waves - Real Time (Optimized)</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* The container for our 3D globe */
+        #globeViz { width: 100vw; height: 100vh; }
+
+        /* The Dashboard Overlay UI */
+        #overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100; /* Force on top of 3D canvas */
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none; /* Let clicks pass through to the globe */
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            max-width: 300px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        h1 { margin: 0 0 10px 0; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 2px; color: #4facfe; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 5px; }
+        .stat { font-size: 0.9rem; margin-bottom: 5px; color: #ddd; display: flex; justify-content: space-between; }
+        .highlight { color: #ff5e62; font-weight: bold; }
+        
+        /* Legend for magnitude colors */
+        .legend { margin-top: 15px; display: flex; gap: 10px; font-size: 0.75rem; color: #aaa; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        /* NEW: Time Footer Bar */
+        #time-footer {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100; /* Force on top of 3D canvas */
+            color: #fff;
+            font-size: 1rem; /* Made slightly larger */
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            border-radius: 4px;
+            pointer-events: none;
+            border-left: 4px solid #4facfe;
+            font-family: monospace;
+            text-shadow: 0 1px 2px black;
+        }
+
+        /* Error message styling */
+        #error-msg {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff5e62;
+            background: rgba(0,0,0,0.9);
+            padding: 30px;
+            border: 1px solid #ff5e62;
+            text-align: center;
+            border-radius: 8px;
+            z-index: 1000;
+        }
+    </style>
+
+    <!-- Import Globe.gl - Using 'defer' for non-blocking load -->
+    <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.45.0/dist/globe.gl.min.js" defer></script>
+</head>
+<body>
+
+    <!-- The UI Overlay -->
+    <div id="overlay">
+        <h1>Seismic Monitor</h1>
+        <div class="stat"><span>Status:</span> <span id="status-text">Initializing...</span></div>
+        <div class="stat"><span>Total Quakes (24h):</span> <span id="quake-count" class="highlight">-</span></div>
+        <div class="stat"><span>Largest Mag:</span> <span id="max-mag" class="highlight">-</span></div>
+        <div class="stat" style="font-size: 0.8rem; color: #888; margin-top:5px;">*Labels shown for Mag 4.5+</div>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="dot" style="background: #ffff00;"></div> Moderate</div>
+            <div class="legend-item"><div class="dot" style="background: #ffa500;"></div> Strong</div>
+            <div class="legend-item"><div class="dot" style="background: #ff0000;"></div> Major</div>
+        </div>
+    </div>
+
+    <!-- NEW: Time Footer -->
+    <div id="time-footer">
+        WAITING FOR DATA...
+    </div>
+
+    <!-- Error container -->
+    <div id="error-msg">
+        <h3>System Error</h3>
+        <p id="error-text">Could not load 3D Engine.</p>
+    </div>
+
+    <!-- The Container for the Globe -->
+    <div id="globeViz"></div>
+
+    <script>
+        // --- APP CONFIGURATION ---
+        const CONFIG = {
+            API_URL: 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson',
+            REFRESH_RATE: 60000,
+            MIN_MAG_FOR_LABEL: 4.5, 
+            RING_SIZE_MULTIPLIER: 0.5, 
+            COLORS: {
+                LOW: '#ffff00',   
+                MED: '#ffa500',   
+                HIGH: '#ff0000'   
+            }
+        };
+
+        window.addEventListener('load', initApp);
+
+        function initApp() {
+            if (typeof Globe === 'undefined') {
+                showError("Globe.gl library failed to load. Check internet connection.");
+                return;
+            }
+
+            const world = initGlobe();
+            fetchData(world);
+            setInterval(() => fetchData(world), CONFIG.REFRESH_RATE);
+        }
+
+        function initGlobe() {
+            try {
+                const world = Globe()
+                (document.getElementById('globeViz'))
+                // CHANGED: Using Blue Marble (Daylight) for a "Natural" look
+                .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+                // CHANGED: Removed backgroundImageUrl for pure black background
+                .backgroundColor('#000000')
+                
+                // --- RINGS LAYER ---
+                .ringColor(d => getQuakeColor(d.mag))
+                .ringMaxRadius(d => d.mag * CONFIG.RING_SIZE_MULTIPLIER) 
+                .ringPropagationSpeed(d => d.mag * 0.5)
+                .ringRepeatPeriod(1000)
+                
+                // --- LABELS LAYER ---
+                .labelText(d => `M${d.mag}`)
+                .labelSize(1.2)
+                .labelDotRadius(0.3)
+                .labelColor(() => 'rgba(255, 255, 255, 0.8)')
+                .labelResolution(1) 
+                .labelAltitude(0.01); 
+
+                // Controls
+                world.controls().autoRotate = true;
+                world.controls().autoRotateSpeed = 0.6;
+                world.controls().enableZoom = true;
+
+                return world;
+            } catch (e) {
+                showError("WebGL Error: " + e.message);
+                throw e;
+            }
+        }
+
+        function fetchData(world) {
+            const statusEl = document.getElementById('status-text');
+            statusEl.innerText = "Syncing...";
+
+            fetch(CONFIG.API_URL)
+                .then(res => res.json())
+                .then(data => {
+                    // Update Time Bar with the exact time the USGS generated this data
+                    if (data.metadata && data.metadata.generated) {
+                        const date = new Date(data.metadata.generated);
+                        // Using toLocaleString to format it nicely for the user's local time
+                        document.getElementById('time-footer').innerText = `UPDATED: ${date.toLocaleString()}`;
+                    } else {
+                        document.getElementById('time-footer').innerText = "TIME UNAVAILABLE";
+                    }
+
+                    const allQuakes = data.features.map(f => ({
+                        lat: f.geometry.coordinates[1], 
+                        lng: f.geometry.coordinates[0], 
+                        mag: f.properties.mag,          
+                        place: f.properties.place,      
+                        time: f.properties.time         
+                    }));
+
+                    world.ringsData(allQuakes);
+                    const significantQuakes = allQuakes.filter(q => q.mag >= CONFIG.MIN_MAG_FOR_LABEL);
+                    world.labelsData(significantQuakes);
+
+                    updateUI(allQuakes);
+                })
+                .catch(err => {
+                    console.error("Fetch error:", err);
+                    statusEl.innerText = "Connection Error";
+                    statusEl.style.color = CONFIG.COLORS.HIGH;
+                    document.getElementById('time-footer').innerText = "CONNECTION FAILED";
+                });
+        }
+
+        function updateUI(quakes) {
+            const statusEl = document.getElementById('status-text');
+            statusEl.innerText = "Live";
+            statusEl.style.color = "#4facfe";
+
+            document.getElementById('quake-count').innerText = quakes.length;
+
+            if (quakes.length > 0) {
+                const maxMag = Math.max(...quakes.map(e => e.mag));
+                document.getElementById('max-mag').innerText = maxMag.toFixed(1);
+            }
+        }
+
+        function getQuakeColor(mag) {
+            if (mag >= 6.0) return CONFIG.COLORS.HIGH;
+            if (mag >= 5.0) return CONFIG.COLORS.MED;
+            return CONFIG.COLORS.LOW;
+        }
+
+        function showError(msg) {
+            const errEl = document.getElementById('error-msg');
+            document.getElementById('error-text').innerText = msg;
+            errEl.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
